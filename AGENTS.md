@@ -16,7 +16,7 @@ Pac-Man en vanilla JS (canvas + HTML + CSS), sin frameworks ni dependencias. El 
 
 - JS sin módulos: los archivos comparten globals y el **orden de carga en `src/index.html` importa** (`maze.js` → `game.js` → `render.js` → `main.js`). Un archivo nuevo debe registrarse ahí en orden de dependencia; un error de global solo se ve en runtime (no hay build que lo detecte).
 - `maze.js` define el laberinto como 31 strings de 28 caracteres (`#` pared, `.` dot, espacio vacío, `-` puerta del pen) que se parsean a números: `0` vacío, `1` pared, `2` dot, `3` puerta. Coordenadas en celdas `(x, y)`, origen arriba-izquierda; `TUNNEL_ROW = 14` hace wrap horizontal.
-- La puerta del pen (3) bloquea a Pac-Man pero no a los fantasmas (`isWall` en `game.js`).
+- La puerta del pen (3) bloquea a todos los actores (`isWall` en `game.js`); solo el fantasma en `leaving` la cruza, porque su salida es determinista y no consulta `canMove`. Los fantasmas en `chase` no pueden re-entrar a la jaula (rescate defensivo con `insidePen` en `moveGhost`).
 - Lógica por frames con `requestAnimationFrame` (sin timestamps): las velocidades son celdas/frame y dependen de la alineación con la rejilla (`PACMAN_SPEED = 0.125` alinea cada 8 frames). No cambiar velocidades a valores que rompan esa alineación.
 - `createGame()` copia `MAZE` a `game.grid` para comer dots. Nunca mutar `MAZE`: debe quedar pristino para poder reiniciar.
 
