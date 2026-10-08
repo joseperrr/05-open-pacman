@@ -13,6 +13,9 @@ const OPPOSITE = { left: 'right', right: 'left', up: 'down', down: 'up' };
 const PACMAN_SPEED = 0.125; // 1/8 celda/frame -> alinea cada 8 frames
 const GHOST_SPEED = 0.1;    // 1/10 celda/frame
 
+// Frames de partida que cada fantasma espera en el pen antes de salir.
+const GHOST_EXIT_FRAMES = { pinky: 120, inky: 240, clyde: 360 }; // ~2s/4s/6s a 60fps
+
 // Crea una partida nueva. Copia MAZE (pristino) a game.grid para poder comer
 // dots sin destruir el original, y reiniciar.
 function createGame() {
@@ -28,6 +31,7 @@ function createGame() {
     score: 0,
     lives: 3,
     dotsRemaining: dots,
+    tick: 0, // frames de partida transcurridos (salidas escalonadas del pen)
     grid,
     pacman: {
       x: PACMAN_START.x,
@@ -42,6 +46,8 @@ function createGame() {
       dir: 'up',
       speed: GHOST_SPEED,
       kind: g.kind,
+      mode: g.kind === 'blinky' ? 'chase' : 'pen',
+      exitAt: GHOST_EXIT_FRAMES[ g.kind ] || 0,
     } ) ),
   };
 }
@@ -110,9 +116,42 @@ function movePacman( game ) {
   wrapTunnel( p, width );
 }
 
+// Objetivo de persecucion segun la personalidad del fantasma.
+// Coordenadas en celdas; pueden caer fuera del tablero: solo guian el greedy.
+function ghostTarget( game, g ) {
+  const p = game.pacman;
+  const px = Math.round( p.x );
+  const py = Math.round( p.y );
+  const d = DIRS[ p.dir ] || { x: 0, y: 0 };
+
+  if ( g.kind === 'pinky' ) {
+    // Embosca: 4 celdas por delante de la direccion actual de Pac-Man.
+    return { x: px + 4 * d.x, y: py + 4 * d.y };
+  }
+
+  if ( g.kind === 'inky' ) {
+    // Flanquea: dobla el vector desde Blinky hasta el punto 2 celdas por
+    // delante de Pac-Man. Sin blinky en la partida (defensivo), imita a Pac-Man.
+    const b = game.ghosts.find( ( o ) => o.kind === 'blinky' );
+    if ( !b ) return { x: px, y: py };
+    const ax = px + 2 * d.x;
+    const ay = py + 2 * d.y;
+    return { x: 2 * ax - Math.round( b.x ), y: 2 * ay - Math.round( b.y ) };
+  }
+
+  if ( g.kind === 'clyde' ) {
+    // Timido: persigue de lejos (mas de 8 celdas) y se retira a su esquina
+    // (0,30) cuando tiene a Pac-Man cerca.
+    const dist = Math.abs( g.x - px ) + Math.abs( g.y - py );
+    return dist > 8 ? { x: px, y: py } : { x: 0, y: 30 };
+  }
+
+  // blinky (agresivo) y fallback defensivo: la celda de Pac-Man.
+  return { x: px, y: py };
+}
+
 function decideGhost( game, g ) {
   const grid = game.grid;
-  const p = game.pacman;
 
   const options = Object.keys( DIRS ).filter(
     ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir, 'ghost' )
@@ -120,28 +159,58 @@ function decideGhost( game, g ) {
   // Sin salida (callejon): permitir el giro de 180.
   const choices = options.length ? options : [ '' + OPPOSITE[ g.dir ] ];
 
-  if ( g.kind === 'hunter' ) {
-    const px = Math.round( p.x );
-    const py = Math.round( p.y );
-    let best = choices[ 0 ];
-    let bestDist = Infinity;
-    for ( const dir of choices ) {
-      const d = DIRS[ dir ];
-      const nx = g.x + d.x;
-      const ny = g.y + d.y;
-      const dist = Math.abs( nx - px ) + Math.abs( ny - py );
-      if ( dist < bestDist ) {
-        bestDist = dist;
-        best = dir;
-      }
+  // Greedy: la direccion que mas acerca al objetivo (sin reversa salvo callejon).
+  const t = ghostTarget( game, g );
+  let best = choices[ 0 ];
+  let bestDist = Infinity;
+  for ( const dir of choices ) {
+    const d = DIRS[ dir ];
+    const nx = g.x + d.x;
+    const ny = g.y + d.y;
+    const dist = Math.abs( nx - t.x ) + Math.abs( ny - t.y );
+    if ( dist < bestDist ) {
+      bestDist = dist;
+      best = dir;
     }
-    g.dir = best;
-  } else {
-    g.dir = choices[ Math.floor( Math.random() * choices.length ) ];
   }
+  g.dir = best;
+}
+
+// Salida determinista del pen: centrarse en la columna de la puerta (13) y
+// subir hasta (13,11). Ahi el fantasma pasa a chase mirando a la izquierda.
+function leavePen( game, g ) {
+  const grid = game.grid;
+  const width = grid[ 0 ].length;
+
+  if ( aligned( g.x ) && aligned( g.y ) ) {
+    g.x = Math.round( g.x );
+    g.y = Math.round( g.y );
+
+    if ( g.x === 13 && g.y === 11 ) {
+      g.mode = 'chase';
+      g.dir = 'left';
+      return;
+    }
+    g.dir = g.x !== 13 ? ( g.x < 13 ? 'right' : 'left' ) : 'up';
+  }
+
+  const d = DIRS[ g.dir ];
+  g.x += d.x * g.speed;
+  g.y += d.y * g.speed;
+  wrapTunnel( g, width );
 }
 
 function moveGhost( game, g ) {
+  if ( g.mode === 'pen' ) {
+    // Espera su turno de salida, quieto en su celda.
+    if ( game.tick >= g.exitAt ) g.mode = 'leaving';
+    return;
+  }
+  if ( g.mode === 'leaving' ) {
+    leavePen( game, g );
+    return;
+  }
+
   const grid = game.grid;
   const width = grid[ 0 ].length;
 
@@ -165,9 +234,13 @@ function resetPositions( game ) {
   p.dir = 'left';
   p.nextDir = null;
   game.ghosts.forEach( ( g, i ) => {
-    g.x = GHOST_STARTS[ i ].x;
-    g.y = GHOST_STARTS[ i ].y;
+    const s = GHOST_STARTS[ i ];
+    g.x = s.x;
+    g.y = s.y;
     g.dir = 'up';
+    // Restaurar modo y re-armar la salida escalonada desde el tick actual.
+    g.mode = g.kind === 'blinky' ? 'chase' : 'pen';
+    g.exitAt = game.tick + ( GHOST_EXIT_FRAMES[ g.kind ] || 0 );
   } );
 }
 
@@ -176,6 +249,7 @@ function collides( a, b ) {
 }
 
 function update( game ) {
+  game.tick++;
   movePacman( game );
   game.ghosts.forEach( ( g ) => moveGhost( game, g ) );
 
