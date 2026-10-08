@@ -57,18 +57,20 @@ function aligned( v ) {
 }
 
 // Una celda es muro para el actor dado?
-//   pacman: bloqueado por pared (1) y puerta (3)
-//   ghost:  bloqueado solo por pared (1)
-function isWall( grid, x, y, actor ) {
+//   pacman y ghost (chase): bloqueados por pared (1) y puerta (3).
+//   Solo la salida determinista (leavePen) cruza la puerta, porque no
+//   consulta canMove.
+function isWall( grid, x, y ) {
   if ( y < 0 || y >= grid.length ) return true;
   if ( x < 0 || x >= grid[ 0 ].length ) return true;
   const v = grid[ y ][ x ];
   if ( v === 1 ) return true;
-  if ( v === 3 && actor === 'pacman' ) return true;
+  if ( v === 3 ) return true;
   return false;
 }
 
 // Puede el actor avanzar desde (x,y) en la direccion dir?
+// actor se mantiene en la firma por compatibilidad; ya no cambia la regla.
 function canMove( grid, x, y, dir, actor ) {
   const d = DIRS[ dir ];
   if ( !d ) return false;
@@ -76,7 +78,7 @@ function canMove( grid, x, y, dir, actor ) {
   const ty = y + d.y;
   // Tunel: salir por un borde en la fila del tunel siempre es valido.
   if ( ty === TUNNEL_ROW && ( tx < 0 || tx >= grid[ 0 ].length ) ) return true;
-  return !isWall( grid, tx, ty, actor );
+  return !isWall( grid, tx, ty );
 }
 
 function wrapTunnel( a, width ) {
@@ -200,6 +202,11 @@ function leavePen( game, g ) {
   wrapTunnel( g, width );
 }
 
+// Caja del pen: puerta (fila 12, col 13) + interior (cols 11-16, filas 13-15).
+function insidePen( g ) {
+  return g.y >= 12 && g.y <= 15 && g.x >= 11 && g.x <= 16;
+}
+
 function moveGhost( game, g ) {
   if ( g.mode === 'pen' ) {
     // Espera su turno de salida, quieto en su celda.
@@ -208,6 +215,14 @@ function moveGhost( game, g ) {
   }
   if ( g.mode === 'leaving' ) {
     leavePen( game, g );
+    return;
+  }
+
+  // Rescate defensivo: con la puerta bloqueada un fantasma en chase no
+  // deberia poder estar dentro de la jaula, pero si acabara ahi, vuelve
+  // al camino de salida determinista (leavePen no consulta canMove).
+  if ( insidePen( g ) ) {
+    g.mode = 'leaving';
     return;
   }
 
